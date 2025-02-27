@@ -18,11 +18,12 @@ local function tokenize(code)
 		["while"]    = true,
 		["repeat"]   = true,
 		["until"]    = true,
-		["return"]   = true,
+		["return"]   = true, --
 		["print"]    = true,
 		["warn"]     = true,
 		["break"]    = true,
 		["continue"] = true,
+		["coroutine.wrap"] = true, -- and create
 		-- TODO
 	}
 
@@ -193,7 +194,8 @@ local function analyzeTokens(tokens)
 					while i + 1 <= n do
 						i = i + 1
 						--print(tokens[i])
-						if tokens[i].class == "identifier" then -- for inside
+						if tokens[i].class == "identifier" and tokens[i-1].class ~= "identifier" then -- for inside
+							--print("declare", tokens[i].value, tokens[i-1])
 							declareVariable(tokens[i], "field var")
 						elseif tokens[i].class == "rparen" then
 							break
@@ -208,7 +210,7 @@ local function analyzeTokens(tokens)
 				pushScope()
 			elseif token.value == "until" then
 				popScope()
-			end
+			end -- tODO im missing more scope delimiters??
 
 		elseif token.class == "identifier" then
 			-- assume any identifier not right after a 'local' is a usage.
@@ -231,9 +233,7 @@ local function analyzeCode(code)
 	return analyzeTokens(tokens)
 end
 
-
 local scripts = {}
-
 for _, v in pairs(game:GetDescendants()) do
 	if v:IsA("BaseScript") or v:IsA("Script") or v:IsA("LocalScript") or v:IsA("ModuleScript") then
 		if v.Parent == game.CoreGui or v.Source == "" then
@@ -273,7 +273,7 @@ if found == 0 then
 end
 
 --[[
-local warnList = analyzeCode(game.ServerScriptService["example var not use"].Source)
+local warnList = analyzeCode(game.ReplicatedFirst.FxHandler.Source)
 if #warnList > 0 then
 	for i, w in pairs(warnList) do
 		warn(w[1])--, w[2])
