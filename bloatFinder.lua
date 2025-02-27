@@ -3,6 +3,7 @@ local function tokenize(code)
 	local pos = 1
 	local line = 1
 	local inSingleLineComment = false
+	local inMultiLineComment = false
 	local len = #code
 
 	local keywords = {
@@ -23,7 +24,6 @@ local function tokenize(code)
 		["warn"]     = true,
 		["break"]    = true,
 		["continue"] = true,
-		["coroutine.wrap"] = true, -- and create
 		-- TODO
 	}
 
@@ -34,7 +34,10 @@ local function tokenize(code)
 			line += 1
 			inSingleLineComment = false
 		end
-		if inSingleLineComment then
+		if inMultiLineComment and c == "]" and code:sub(pos+1, pos+1) == c then
+			inMultiLineComment = false
+		end
+		if inSingleLineComment or inMultiLineComment then
 			pos = pos + 1
 			continue
 		end
@@ -43,8 +46,14 @@ local function tokenize(code)
 		if c:match("%s") then
 			pos = pos + 1
 		elseif c == "-" and code:sub(pos+1, pos+1) == c then -- todo will err if there is - at last position of code
-			inSingleLineComment = true
-			pos = pos + 2
+			if code:sub(pos+2, pos+2) == "[" then
+				--print("in multiline", line)
+				inMultiLineComment = true
+				pos = pos + 4
+			else
+				inSingleLineComment = true
+				pos = pos + 2
+			end
 		elseif c:match("[%a_]") then -- ids/keywords (starts with a letter or _)
 			local start = pos
 			while pos <= len and code:sub(pos, pos):match("[%w_]") do
@@ -202,15 +211,16 @@ local function analyzeTokens(tokens)
 						end
 					end
 				end
-			elseif token.value == "do" or token.value == "if" then
+			elseif token.value == "do" or token.value == "then" then
 				pushScope()
-			elseif token.value == "end" then
+			elseif token.value == "end" or token.value == "elseif" then
 				popScope()
-			elseif token.value == "for" or token.value == "while" or token.value == "repeat" then
+			elseif token.value == "repeat" then
 				pushScope()
 			elseif token.value == "until" then
 				popScope()
-			end -- tODO im missing more scope delimiters??
+				pushScope()
+			end
 
 		elseif token.class == "identifier" then
 			-- assume any identifier not right after a 'local' is a usage.
