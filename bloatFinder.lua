@@ -6,6 +6,12 @@ local function tokenize(code)
 	local inMultiLineComment = false
 	local len = #code
 
+	local stringStarters = {[["]], [[']], "[[", "[=["}
+	local stringEnders   = {[["]], [[']], "]]", "]=]"}
+	local isString = false
+	local stringI = 0
+	local stringStart = 0
+
 	local keywords = {
 		["local"]    = true,
 		["function"] = true,
@@ -29,15 +35,44 @@ local function tokenize(code)
 
 	while pos <= len do
 		local c = code:sub(pos, pos)
-		
+
 		if c == "\n" then
 			line += 1
 			inSingleLineComment = false
 		end
 		if inMultiLineComment and c == "]" and code:sub(pos+1, pos+1) == c then
+			--print("ending multiline")
 			inMultiLineComment = false
 		end
 		if inSingleLineComment or inMultiLineComment then
+			pos = pos + 1
+			continue
+		end
+		
+		if isString == false then
+			-- current pos starts a string literal
+			for i, starter in ipairs(stringStarters) do
+				if code:sub(pos, pos + #starter - 1) == starter then
+					isString = true
+					--print(starter, "STRING START")
+					stringStart = pos
+					pos = pos + #starter
+					stringI = i
+					break
+				end
+			end
+		else
+			-- current pos ends a string literal
+
+			local ender = stringEnders[stringI]
+			if code:sub(pos, pos + #ender - 1) == ender then
+				isString = false
+				pos = pos + #ender - 1
+				--print("string End", code:sub(stringStart, pos), "line: "..tostring(line))
+				--break
+				table.insert(tokens, { class = "string", value = code:sub(stringStart, pos), line = line })
+			end
+			
 			pos = pos + 1
 			continue
 		end
@@ -46,15 +81,15 @@ local function tokenize(code)
 		if c:match("%s") then
 			pos = pos + 1
 		elseif c == "-" and code:sub(pos+1, pos+1) == c then -- todo will err if there is - at last position of code
-			if code:sub(pos+2, pos+2) == "[" then
-				--print("in multiline", line)
+			if code:sub(pos+2, pos+3) == "[[" then
+				--print("entering multiline", line)
 				inMultiLineComment = true
-				pos = pos + 4
 			else
 				inSingleLineComment = true
-				pos = pos + 2
 			end
+			pos = pos + 1
 		elseif c:match("[%a_]") then -- ids/keywords (starts with a letter or _)
+			local last = if pos > 1 then code:sub(pos-1, pos-1) else nil
 			local start = pos
 			while pos <= len and code:sub(pos, pos):match("[%w_]") do
 				pos = pos + 1
@@ -63,7 +98,11 @@ local function tokenize(code)
 			if keywords[word] then
 				table.insert(tokens, { class = "keyword", value = word, line = line })
 			else
-				table.insert(tokens, { class = "identifier", value = word, line = line })
+				if last == "." or last == ":" then
+					table.insert(tokens, { class = "method", value = word, line = line })
+				else
+					table.insert(tokens, { class = "identifier", value = word, line = line })
+				end
 			end
 		elseif c == "=" then -- match operatrs and punctuation
 			table.insert(tokens, { class = "operator", value = "=", line = line })
@@ -114,12 +153,15 @@ local function analyzeTokens(tokens)
 		table.insert(scopeStack, {})
 	end
 
+	local i = 1
 	local warnTabl = {}
 	local function popScope()
-		local i = #scopeStack
+		local stackDepth = #scopeStack
 		local scope = table.remove(scopeStack)
+		--print("popped", scope, i)
 		if scope then
 		else
+			--error(debug.traceback())
 			return
 		end
 
@@ -127,7 +169,7 @@ local function analyzeTokens(tokens)
 		-- the check
 		for var, data in pairs(scope) do
 			if not data[1] then -- if not used
-				local str = data[3].." '" .. var .. "' declared but not used. line "..tostring(data[4])..". scope depth "..tostring(i)
+				local str = data[3].." '" .. var .. "' declared but not used. line "..tostring(data[4])..". scope depth "..tostring(stackDepth)
 				table.insert(warnTabl, {str, scope})
 				task.wait() -- main lazy worker
 			end
@@ -146,52 +188,36 @@ local function analyzeTokens(tokens)
 	local function markUsage(name)
 		for i = #scopeStack, 1, -1 do
 			if scopeStack[i][name] ~= nil then
+				--print("marked", name, i, scopeStack[i])
 				scopeStack[i][name][1] = true -- is used
-				--print("marked stack",i,name)
 				break
 			end
 		end
 	end
 
-	local i = 1
 	local n = #tokens
-
-	--[[local function getPrevUntillWhiteSpace()
-		local str = ""
-		local breakNext = false
-		for i2 = i-10,i do
-			if tokens[i2] and breakNext == false then
-				local v = tokens[i2]
-				if v.class == "identifier" then
-					breakNext = true
-				end
-				str ..= v.value
-			else
-				break
-			end
-		end
-		print(str)
-		return str
-	end]]
 
 	while i <= n do
 		local token = tokens[i]
 
 		if token.class == "keyword" then
 			if token.value == "local" then
-				if i + 1 <= n and tokens[i+1].class == "identifier" then
+				if i + 1 <= n and (tokens[i+1].class == "identifier" or tokens[i+1] == "method") then
 					declareVariable(tokens[i+1], "local")
 					i = i + 1
 					while i + 1 <= n and tokens[i+1].class == "comma" do
 						i = i + 2
-						if tokens[i] and tokens[i].class == "identifier" then
+						if tokens[i] and (tokens[i].class == "identifier" or tokens[i+1] == "method") then
 							declareVariable(tokens[i], "local ...,")
 						end
 					end
 				end
 			elseif token.value == "function" then
 				if i + 1 <= n and tokens[i+1].class == "identifier" then
-					declareVariable(tokens[i+1], "function")
+					if tokens[i+2] and tokens[i+2].class == "method" then
+					else
+						declareVariable(tokens[i+1], "function")
+					end
 					i = i + 1
 				end
 				pushScope() 
@@ -203,9 +229,11 @@ local function analyzeTokens(tokens)
 					while i + 1 <= n do
 						i = i + 1
 						--print(tokens[i])
-						if tokens[i].class == "identifier" and tokens[i-1].class ~= "identifier" then -- for inside
-							--print("declare", tokens[i].value, tokens[i-1])
-							declareVariable(tokens[i], "field var")
+						if tokens[i].class == "identifier" and tokens[i-1].class ~= "identifier" and tokens[i-1].value ~= "=" then -- for inside
+							if tokens[i+1] and tokens[i+1].value == "=" then -- already declared
+							else
+								declareVariable(tokens[i], "field var")
+							end
 						elseif tokens[i].class == "rparen" then
 							break
 						end
@@ -222,9 +250,9 @@ local function analyzeTokens(tokens)
 				pushScope()
 			end
 
-		elseif token.class == "identifier" then
-			-- assume any identifier not right after a 'local' is a usage.
+		elseif token.class == "identifier" or (tokens[i+1] and tokens[i+1].class == "method") or (tokens[i-1] and tokens[i-1].class == "keyword") then
 			markUsage(token.value)
+			--print(token.value)
 		end
 
 		i = i + 1
@@ -234,7 +262,7 @@ local function analyzeTokens(tokens)
 	while #scopeStack > 0 do
 		popScope()
 	end
-	
+
 	return warnTabl
 end
 
@@ -249,6 +277,9 @@ for _, v in pairs(game:GetDescendants()) do
 		if v.Parent == game.CoreGui or v.Source == "" then
 			continue
 		end
+		--[[if v.Name ~= "AttackModule" then
+			continue
+		end]]
 
 		table.insert(scripts, v)
 	end
@@ -271,22 +302,16 @@ for _, v in pairs(scripts) do
 	local warnList = analyzeCode(v.Source)
 	if #warnList > 0 then
 		found += #warnList
-		print("inside:",v:GetFullName())
+		print("")
+		print("inside:",v:GetFullName(),#warnList)
 		for i, w in pairs(warnList) do
 			warn(w[1], w[2])
 		end
+		
+		--break
 	end
 end
 
 if found == 0 then
 	warn("no scripts found")
 end
-
---[[
-local warnList = analyzeCode(game.ReplicatedFirst.FxHandler.Source)
-if #warnList > 0 then
-	for i, w in pairs(warnList) do
-		warn(w[1])--, w[2])
-	end
-end
-]]
